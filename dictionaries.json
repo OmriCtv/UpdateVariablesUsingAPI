@@ -223,13 +223,18 @@
     "אריאל": "Ariel",
     "יהוד": "Yehud",
     "תל השומר רמת גן": "Tel HaShomer",
-    "שפיים": "Shefayim"
+    "שפיים": "Shefayim",
+    "מעיליא": "Mi'ilya",
+    "ראמה": "Rama",
+    "כפר ורדים": "Kfar Vardim",
+    "בית ג'אן": "Beit Jann"
   },
   "ISP_dictionary": {
     "הוט": "HOT",
     "הוט מובייל": "HOT",
     "טריפל": "TRIPLE",
     "טריפל C": "TRIPLE",
+    "בזק": "TRIPLE",
     "סלקום": "TRIPLE",
     "פלאפון (טריפל C סלולר)": "TRIPLE"
   },
