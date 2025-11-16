@@ -67,6 +67,9 @@ def load_dictionaries() -> dict:
 
 
 def translate_city(city_he: str, dictionaries: dict) -> str:
+    """
+    Translate Hebrew city name to English code using cities_dictionary.
+    """
     cities = dictionaries.get("cities_dictionary", {})
     for key, value in cities.items():
         if key.replace("\u00a0", " ").strip() == city_he:
@@ -277,6 +280,115 @@ def set_player_isp(token: str, player_id: int, isp_en: str) -> None:
     resp.raise_for_status()
 
 
+def set_player_streaming_flags(
+    token: str,
+    player_id: int,
+    identifier: str,
+    *,
+    any_combined: bool,
+    any_lh_only: bool,
+    any_pv_only: bool,
+    is_combined: bool,
+    is_lh_only: bool,
+    is_pv_only: bool,
+) -> None:
+    """
+    Set streaming-muted variables for the given player according to the rules:
+
+    Case A – LH-only and PV-only players, no combined (PV_LH/LH_PV):
+      - LH-only player(s): one non-vertical flag true (by -H/-T), others false.
+      - PV-only player(s): all false.
+
+    Case B – combined player(s) AND a single "alone" type (LH-only or PV-only):
+      - Alone player(s): all false.
+      - Combined player(s):
+          * if alone is LH-only  -> vertical flag true (by -H/-T), others false.
+          * if alone is PV-only  -> non-vertical flag true (by -H/-T), others false.
+
+    Case C – only combined player(s), no alone LH/PV:
+      - Combined player(s): vertical flag true (by -H/-T), others false.
+    """
+    id_upper = identifier.upper()
+
+    # Debug context
+    print(
+        f"  Streaming flags decision for '{identifier}': "
+        f"any_combined={any_combined}, any_lh_only={any_lh_only}, any_pv_only={any_pv_only}, "
+        f"is_combined={is_combined}, is_lh_only={is_lh_only}, is_pv_only={is_pv_only}"
+    )
+
+    # Start with all false
+    payload: dict[str, str] = {
+        "M4DS_StreamingHot_Muted": "false",
+        "M4DS_StreamingTriple_Muted": "false",
+        "M4DS_StreamingVerticalHot_Muted": "false",
+        "M4DS_StreamingVerticalTriple_Muted": "false",
+    }
+
+    ends_with_h = id_upper.endswith("-H")
+    ends_with_t = id_upper.endswith("-T")
+
+    if any_combined:
+        # Cases B and C – there is at least one combined player in this number.
+        if is_combined:
+            # Determine alone type, if any.
+            alone_is_lh = any_lh_only and not any_pv_only
+            alone_is_pv = any_pv_only and not any_lh_only
+
+            if alone_is_lh:
+                # Combined gets vertical flag true.
+                if ends_with_h:
+                    payload["M4DS_StreamingVerticalHot_Muted"] = "true"
+                elif ends_with_t:
+                    payload["M4DS_StreamingVerticalTriple_Muted"] = "true"
+            elif alone_is_pv:
+                # Combined gets non-vertical flag true.
+                if ends_with_h:
+                    payload["M4DS_StreamingHot_Muted"] = "true"
+                elif ends_with_t:
+                    payload["M4DS_StreamingTriple_Muted"] = "true"
+            else:
+                # Only combined players and no alone LH/PV → treat like vertical true.
+                if ends_with_h:
+                    payload["M4DS_StreamingVerticalHot_Muted"] = "true"
+                elif ends_with_t:
+                    payload["M4DS_StreamingVerticalTriple_Muted"] = "true"
+        else:
+            # Alone players when a combined exists → always all false.
+            pass
+    else:
+        # Case A – no combined players for this number.
+        if any_lh_only and any_pv_only and is_lh_only:
+            # Only LH-only players get non-vertical true.
+            if ends_with_h:
+                payload["M4DS_StreamingHot_Muted"] = "true"
+            elif ends_with_t:
+                payload["M4DS_StreamingTriple_Muted"] = "true"
+
+    body = [{"name": name, "value": value} for name, value in payload.items()]
+
+    print(
+        f"  Streaming muted POST body for player {player_id}: "
+        f"{json.dumps(body, ensure_ascii=False)}"
+    )
+
+    resp = requests.post(
+        f"{API_BASE_URL}/v1/players/{player_id}/variables",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json-patch+json",
+        },
+        json=body,
+        timeout=60,
+    )
+    # Log response body for debugging regardless of status
+    try:
+        print(f"  Streaming muted POST status: {resp.status_code}, body: {resp.text}")
+    except Exception:
+        pass
+    resp.raise_for_status()
+
+
 def main() -> None:
     if not CSV_FILE.exists():
         raise FileNotFoundError(f"CSV file not found: {CSV_FILE}")
@@ -315,9 +427,27 @@ def main() -> None:
 
     print(f"Found {len(target_players)} player(s) matching site {site_id}.")
 
+    # Determine, within this site/number, whether there are LH-only, PV-only
+    # and/or combined (PV_LH/LH_PV) players.
+    any_lh_only = False
+    any_pv_only = False
+    any_combined = False
+    for p in target_players:
+        ident_raw = (p.get("identifier") or p.get("name") or "").strip()
+        ident = ident_raw.upper()
+        has_lh = "LH" in ident
+        has_pv = "PV" in ident
+        is_combined = "PV_LH" in ident or "LH_PV" in ident
+        if is_combined:
+            any_combined = True
+        elif has_lh and not has_pv:
+            any_lh_only = True
+        elif has_pv and not has_lh:
+            any_pv_only = True
+
     for player in target_players:
         player_id = player.get("playerId") or player.get("id")
-        identifier = player.get("identifier") or player.get("name", "")
+        identifier = (player.get("identifier") or player.get("name", "")).strip()
         if player_id is None:
             print(f"Skipping player without id: {identifier}")
             continue
@@ -341,6 +471,10 @@ def main() -> None:
 
             current_reseller = None
             current_isp = None
+            current_stream_hot = None
+            current_stream_triple = None
+            current_stream_vert_hot = None
+            current_stream_vert_triple = None
             reseller_index: int | None = None
             for idx, item in enumerate(vars_list):
                 if not isinstance(item, dict):
@@ -350,10 +484,22 @@ def main() -> None:
                     current_reseller = item.get("value")
                 if item.get("name") == "M4DS_ISP":
                     current_isp = item.get("value")
+                if item.get("name") == "M4DS_StreamingHot_Muted":
+                    current_stream_hot = item.get("value")
+                if item.get("name") == "M4DS_StreamingTriple_Muted":
+                    current_stream_triple = item.get("value")
+                if item.get("name") == "M4DS_StreamingVerticalHot_Muted":
+                    current_stream_vert_hot = item.get("value")
+                if item.get("name") == "M4DS_StreamingVerticalTriple_Muted":
+                    current_stream_vert_triple = item.get("value")
 
             print(f"  Current city: {current_city!r}")
             print(f"  Current reseller: {current_reseller!r}")
             print(f"  Current ISP: {current_isp!r}")
+            print(f"  Current StreamingHot_Muted: {current_stream_hot!r}")
+            print(f"  Current StreamingTriple_Muted: {current_stream_triple!r}")
+            print(f"  Current StreamingVerticalHot_Muted: {current_stream_vert_hot!r}")
+            print(f"  Current StreamingVerticalTriple_Muted: {current_stream_vert_triple!r}")
 
             # Patch city
             patch_player_city(token, player_id, city_en)
@@ -363,6 +509,27 @@ def main() -> None:
             set_player_reseller(token, player_id, reseller_en)
             token = request_token(api_key, organization)
             set_player_isp(token, player_id, isp_en)
+
+            # Set streaming-muted flags based on identifier and group rules
+            ident_upper = identifier.upper()
+            has_lh = "LH" in ident_upper
+            has_pv = "PV" in ident_upper
+            is_combined = "PV_LH" in ident_upper or "LH_PV" in ident_upper
+            is_lh_only = has_lh and not has_pv and not is_combined
+            is_pv_only = has_pv and not has_lh and not is_combined
+
+            token = request_token(api_key, organization)
+            set_player_streaming_flags(
+                token,
+                player_id,
+                identifier,
+                any_combined=any_combined,
+                any_lh_only=any_lh_only,
+                any_pv_only=any_pv_only,
+                is_combined=is_combined,
+                is_lh_only=is_lh_only,
+                is_pv_only=is_pv_only,
+            )
 
             # Fetch updated player and show new values
             token = request_token(api_key, organization)
@@ -380,6 +547,10 @@ def main() -> None:
 
             new_reseller = None
             new_isp = None
+            new_stream_hot = None
+            new_stream_triple = None
+            new_stream_vert_hot = None
+            new_stream_vert_triple = None
             for item in updated_vars_list:
                 if not isinstance(item, dict):
                     continue
@@ -387,10 +558,22 @@ def main() -> None:
                     new_reseller = item.get("value")
                 if item.get("name") == "M4DS_ISP":
                     new_isp = item.get("value")
+                if item.get("name") == "M4DS_StreamingHot_Muted":
+                    new_stream_hot = item.get("value")
+                if item.get("name") == "M4DS_StreamingTriple_Muted":
+                    new_stream_triple = item.get("value")
+                if item.get("name") == "M4DS_StreamingVerticalHot_Muted":
+                    new_stream_vert_hot = item.get("value")
+                if item.get("name") == "M4DS_StreamingVerticalTriple_Muted":
+                    new_stream_vert_triple = item.get("value")
 
             print(f"  Updated city: {new_city!r}")
             print(f"  Updated reseller: {new_reseller!r}")
             print(f"  Updated ISP: {new_isp!r}")
+            print(f"  Updated StreamingHot_Muted: {new_stream_hot!r}")
+            print(f"  Updated StreamingTriple_Muted: {new_stream_triple!r}")
+            print(f"  Updated StreamingVerticalHot_Muted: {new_stream_vert_hot!r}")
+            print(f"  Updated StreamingVerticalTriple_Muted: {new_stream_vert_triple!r}")
         except requests.HTTPError as exc:
             print(f"  [ERROR] API call failed: {exc}")
         except Exception as exc:
