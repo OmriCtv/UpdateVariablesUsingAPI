@@ -293,8 +293,6 @@ def main() -> None:
         raise FileNotFoundError(f"Missing sites file not found: {MISSING_SITES_FILE}")
 
     original_sites = load_missing_sites(MISSING_SITES_FILE)
-    # TEMP: limit to first 3 sites so the user can verify behavior safely.
-    sites_to_process = original_sites[:3]
     dictionaries = load_dictionaries()
     api_key, organization = get_api_credentials()
 
@@ -302,10 +300,10 @@ def main() -> None:
     token = request_token(api_key, organization)
     players_cache = fetch_players(token)
 
-    # Start with all sites that are not being processed (from index 3 onward)
-    remaining_sites: List[Tuple[str, str]] = original_sites[3:]
+    # Process all sites from the CSV
+    remaining_sites: List[Tuple[str, str]] = []
 
-    for site_id, existing_note in sites_to_process:
+    for site_id, existing_note in original_sites:
         resolved, note = process_site(
             site_id, dictionaries, api_key, organization, players_cache
         )

@@ -39,6 +39,10 @@ def iter_csv_rows(path: Path, encodings: Iterable[str]) -> Iterable[list[str]]:
 
 
 def find_site_city(site_id: str) -> str:
+    """
+    Look up 'עיר האתר' (city) for the given site id in the CSV.
+    If multiple rows exist for the site, returns the first one with non-empty city.
+    """
     encodings = ("utf-8-sig", "utf-8", "windows-1255", "cp1255", "iso-8859-8", "latin1")
     rows = iter_csv_rows(CSV_FILE, encodings)
     header = next(rows)
@@ -49,16 +53,16 @@ def find_site_city(site_id: str) -> str:
     except ValueError as exc:
         raise RuntimeError("Expected columns not found in CSV header.") from exc
 
+    # Check all rows for this site and use the first one with non-empty city
     for row in rows:
         if len(row) <= max(site_idx, city_idx):
             continue
         if row[site_idx] == site_id:
             city = row[city_idx].replace("\u00a0", " ").strip()
-            if not city:
-                raise RuntimeError(f"City column empty for site {site_id}.")
-            return city
+            if city:  # Found a row with non-empty city, return it
+                return city
 
-    raise RuntimeError(f"Site id {site_id} not found in CSV.")
+    raise RuntimeError(f"Site id {site_id} not found in CSV or all rows have empty city.")
 
 
 def load_dictionaries() -> dict:
@@ -102,6 +106,7 @@ def translate_isp(isp_he: str, dictionaries: dict) -> str:
 def find_site_reseller(site_id: str) -> str:
     """
     Look up 'תאור משווק' (reseller description) for the given site id in the CSV.
+    If multiple rows exist for the site, returns the first one with non-empty reseller.
     """
     encodings = ("utf-8-sig", "utf-8", "windows-1255", "cp1255", "iso-8859-8", "latin1")
     rows = iter_csv_rows(CSV_FILE, encodings)
@@ -113,21 +118,22 @@ def find_site_reseller(site_id: str) -> str:
     except ValueError as exc:
         raise RuntimeError("Expected columns not found in CSV header.") from exc
 
+    # Check all rows for this site and use the first one with non-empty reseller
     for row in rows:
         if len(row) <= max(site_idx, reseller_idx):
             continue
         if row[site_idx] == site_id:
             reseller = row[reseller_idx].replace("\u00a0", " ").strip()
-            if not reseller:
-                raise RuntimeError(f"Reseller column empty for site {site_id}.")
-            return reseller
+            if reseller:  # Found a row with non-empty reseller, return it
+                return reseller
 
-    raise RuntimeError(f"Site id {site_id} not found in CSV.")
+    raise RuntimeError(f"Site id {site_id} not found in CSV or all rows have empty reseller.")
 
 
 def find_site_isp(site_id: str) -> str:
     """
     Look up 'ספק תקשורת' (ISP) for the given site id in the CSV.
+    If multiple rows exist for the site, returns the first one with non-empty ISP.
     """
     encodings = ("utf-8-sig", "utf-8", "windows-1255", "cp1255", "iso-8859-8", "latin1")
     rows = iter_csv_rows(CSV_FILE, encodings)
@@ -139,16 +145,16 @@ def find_site_isp(site_id: str) -> str:
     except ValueError as exc:
         raise RuntimeError("Expected columns not found in CSV header.") from exc
 
+    # Check all rows for this site and use the first one with non-empty ISP
     for row in rows:
         if len(row) <= max(site_idx, isp_idx):
             continue
         if row[site_idx] == site_id:
             isp = row[isp_idx].replace("\u00a0", " ").strip()
-            if not isp:
-                raise RuntimeError(f"ISP column empty for site {site_id}.")
-            return isp
+            if isp:  # Found a row with non-empty ISP, return it
+                return isp
 
-    raise RuntimeError(f"Site id {site_id} not found in CSV.")
+    raise RuntimeError(f"Site id {site_id} not found in CSV or all rows have empty ISP.")
 
 
 def get_api_credentials() -> Tuple[str, str]:
