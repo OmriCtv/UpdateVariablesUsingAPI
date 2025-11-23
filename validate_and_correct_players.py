@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -300,7 +301,7 @@ def fetch_player(token: str, player_id: int) -> dict:
 
 
 def patch_player_city(token: str, player_id: int, city_en: str) -> None:
-    """Update player city using PATCH."""
+    """Update player city using PATCH. This does NOT delete anything - only updates the city value."""
     resp = requests.patch(
         f"{API_BASE_URL}/v1/players/{player_id}",
         headers={
@@ -314,7 +315,7 @@ def patch_player_city(token: str, player_id: int, city_en: str) -> None:
 
 
 def set_player_reseller(token: str, player_id: int, reseller_en: str) -> None:
-    """Set the M4DS_Reseller variable for a player."""
+    """Set the M4DS_Reseller variable for a player. This does NOT delete anything - only updates/adds the variable."""
     if not reseller_en:
         return
 
@@ -338,7 +339,7 @@ def set_player_reseller(token: str, player_id: int, reseller_en: str) -> None:
 
 
 def set_player_sector(token: str, player_id: int, sector_en: str) -> None:
-    """Set the M4DS_Sector variable for a player."""
+    """Set the M4DS_Sector variable for a player. This does NOT delete anything - only updates/adds the variable."""
     if not sector_en:
         return
 
@@ -387,6 +388,16 @@ def validate_and_correct_player(
         "site_number": None,
         "updated": False,
         "error": None,
+        # Track original and new values for CSV
+        "original_city": None,
+        "new_city": None,
+        "city_changed": False,
+        "original_reseller": None,
+        "new_reseller": None,
+        "reseller_changed": False,
+        "original_sector": None,
+        "new_sector": None,
+        "sector_changed": False,
     }
 
     if player_id is None:
@@ -401,6 +412,7 @@ def validate_and_correct_player(
         # Get current values
         coords = player_details.get("coordinates") or {}
         current_city = coords.get("city")
+        result["original_city"] = current_city or ""
 
         vars_raw = player_details.get("variables") or []
         if isinstance(vars_raw, dict):
@@ -419,6 +431,9 @@ def validate_and_correct_player(
                 current_reseller = item.get("value")
             if item.get("name") == "M4DS_Sector":
                 current_sector = item.get("value")
+        
+        result["original_reseller"] = current_reseller or ""
+        result["original_sector"] = current_sector or ""
 
         # Validate city
         city_valid = False
@@ -521,16 +536,22 @@ def validate_and_correct_player(
                 token = request_token(api_key, organization)
                 if result["city_invalid"] and city_en:
                     patch_player_city(token, player_id, city_en)
+                    result["city_changed"] = True
+                    result["new_city"] = city_en
                     print(f"    ✓ City updated successfully")
 
                 if result["reseller_invalid"] and reseller_en:
                     token = request_token(api_key, organization)
                     set_player_reseller(token, player_id, reseller_en)
+                    result["reseller_changed"] = True
+                    result["new_reseller"] = reseller_en
                     print(f"    ✓ Reseller updated successfully")
 
                 if result["sector_invalid"] and sector_en:
                     token = request_token(api_key, organization)
                     set_player_sector(token, player_id, sector_en)
+                    result["sector_changed"] = True
+                    result["new_sector"] = sector_en
                     print(f"    ✓ Sector updated successfully")
 
                 result["updated"] = True
@@ -558,6 +579,86 @@ def validate_and_correct_player(
         print(f"  [ERROR] Failed to process player {identifier} (ID: {player_id}): {exc}")
 
     return result
+
+
+def write_results_csv(results: list[dict], output_file: Path, total_players: int, processed_count: int) -> None:
+    """
+    Write validation results to a CSV file.
+    
+    IMPORTANT: This CSV only contains players that were actually checked/processed.
+    Players that were not processed (due to test mode limits) are NOT included.
+    This script does NOT delete any players - it only updates existing player data.
+    """
+    if not results:
+        return
+    
+    fieldnames = [
+        "Player ID",
+        "Player Identifier",
+        "Site Number",
+        "City Status",
+        "Reseller Status",
+        "Sector Status",
+        "Error Message",
+    ]
+    
+    with output_file.open("w", encoding="utf-8-sig", newline="") as fh:
+        # Write explanation header for Notepad readability
+        fh.write(f"Player Validation Results Report\n")
+        fh.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        fh.write(f"Total players in system: {total_players}\n")
+        fh.write(f"Players checked in this run: {processed_count}\n")
+        fh.write(f"Players in this CSV (with errors or updates): {len(results)}\n")
+        fh.write(f"\n")
+        fh.write(f"IMPORTANT NOTES:\n")
+        fh.write(f"- This CSV contains ONLY players with ERRORS or UPDATES\n")
+        fh.write(f"- Players that were OK (no changes needed) are NOT included\n")
+        fh.write(f"- Players not checked remain completely untouched in the system\n")
+        fh.write(f"- This script does NOT delete any players - it only updates data\n")
+        fh.write(f"\n")
+        fh.write(f"{'='*100}\n")
+        fh.write(f"DATA STARTS BELOW\n")
+        fh.write(f"{'='*100}\n")
+        fh.write(f"\n")
+        
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for r in results:
+            # Build city status description
+            original_city = r.get("original_city", "") or "(empty)"
+            if r.get("city_changed"):
+                new_city = r.get("new_city", "") or "(empty)"
+                city_status = f"city changed from {original_city} to {new_city}"
+            else:
+                city_status = f"city is valid ({original_city})"
+            
+            # Build reseller status description
+            original_reseller = r.get("original_reseller", "") or "(empty)"
+            if r.get("reseller_changed"):
+                new_reseller = r.get("new_reseller", "") or "(empty)"
+                reseller_status = f"reseller changed from {original_reseller} to {new_reseller}"
+            else:
+                reseller_status = f"reseller is valid ({original_reseller})"
+            
+            # Build sector status description
+            original_sector = r.get("original_sector", "") or "(empty)"
+            if r.get("sector_changed"):
+                new_sector = r.get("new_sector", "") or "(empty)"
+                sector_status = f"sector changed from {original_sector} to {new_sector}"
+            else:
+                sector_status = f"sector is valid ({original_sector})"
+            
+            row = {
+                "Player ID": r.get("player_id", ""),
+                "Player Identifier": r.get("identifier", ""),
+                "Site Number": r.get("site_number", ""),
+                "City Status": city_status,
+                "Reseller Status": reseller_status,
+                "Sector Status": sector_status,
+                "Error Message": r.get("error", ""),
+            }
+            writer.writerow(row)
 
 
 def main() -> int:
@@ -598,14 +699,18 @@ def main() -> int:
         print("[ERROR] No players found in the system.")
         return 1
 
+    # Process all players
+    original_total_count = len(all_players)
     print(f"\n[INFO] Processing all {len(all_players)} player(s)...")
     print("[INFO] This may take a while.\n")
-
 
     results = []
     corrected_count = 0
     error_count = 0
 
+    # Process only the limited set of players (e.g., first 100 in test mode)
+    # IMPORTANT: Players not in this list are NOT affected - they remain unchanged in the system
+    # This script does NOT delete any players, only updates the ones that are processed
     for i, player in enumerate(all_players, 1):
         if i % 10 == 0:
             print(f"[INFO] Processing player {i}/{len(all_players)}...")
@@ -642,6 +747,24 @@ def main() -> int:
         print(f"\nPlayers with errors ({len(players_with_errors)}):")
         for r in players_with_errors:
             print(f"  - {r['identifier']} (ID: {r['player_id']}): {r['error']}")
+
+    # Write results to CSV
+    # IMPORTANT: This CSV only includes players that had errors or were updated (changed values)
+    # Players that were OK and didn't need changes are NOT included in this CSV
+    # Players not checked are NOT included in this CSV and remain completely untouched in the system
+    filtered_results = [r for r in results if r.get("error") or r.get("updated")]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_output_file = Path(f"player_validation_results_{timestamp}.csv")
+    print(f"\n[INFO] Writing results to CSV: {csv_output_file}")
+    print(f"[INFO] Total players checked: {len(results)}")
+    print(f"[INFO] Players with errors or updates: {len(filtered_results)}")
+    print(f"[INFO] CSV will contain only players with errors or updates (not OK players)")
+    try:
+        write_results_csv(filtered_results, csv_output_file, original_total_count, len(results))
+        print(f"[INFO] CSV file created successfully: {csv_output_file}")
+        print(f"[INFO] CSV contains {len(filtered_results)} player(s) with errors or updates")
+    except Exception as exc:
+        print(f"[ERROR] Failed to write CSV file: {exc}")
 
     return 0
 
