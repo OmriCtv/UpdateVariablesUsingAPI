@@ -601,6 +601,7 @@ def main() -> int:
     print(f"\n[INFO] Processing all {len(all_players)} player(s)...")
     print("[INFO] This may take a while.\n")
 
+
     results = []
     corrected_count = 0
     error_count = 0
@@ -639,10 +640,8 @@ def main() -> int:
     players_with_errors = [r for r in results if r["error"]]
     if players_with_errors:
         print(f"\nPlayers with errors ({len(players_with_errors)}):")
-        for r in players_with_errors[:20]:  # Show first 20
+        for r in players_with_errors:
             print(f"  - {r['identifier']} (ID: {r['player_id']}): {r['error']}")
-        if len(players_with_errors) > 20:
-            print(f"  ... and {len(players_with_errors) - 20} more")
 
     return 0
 
