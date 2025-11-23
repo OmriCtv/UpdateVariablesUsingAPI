@@ -194,7 +194,8 @@ def process_site(
                 if item.get("name") == "M4DS_StreamingVerticalTriple_Muted":
                     current_stream_vert_triple = item.get("value")
 
-            print(f"  Current city: {current_city!r}")
+            print(f"  Current city: {current_city!
+            r}")
             print(f"  Current reseller: {current_reseller!r}")
             print(f"  Current ISP: {current_isp!r}")
             print(f"  Current StreamingHot_Muted: {current_stream_hot!r}")

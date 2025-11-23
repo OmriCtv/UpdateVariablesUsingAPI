@@ -103,6 +103,65 @@ def translate_isp(isp_he: str, dictionaries: dict) -> str:
     raise RuntimeError(f"ISP '{isp_he}' not found in ISP_dictionary.")
 
 
+def find_site_sector(site_id: str, dictionaries: dict) -> str:
+    """
+    Look up 'סוג תוכן' (content type/sector) for the given site id in the CSV.
+    If multiple rows exist for the site, prioritizes values that exist in sector_dictionary.
+    Returns the first sector value that matches the dictionary, otherwise returns the first non-empty value.
+    """
+    encodings = ("utf-8-sig", "utf-8", "windows-1255", "cp1255", "iso-8859-8", "latin1")
+    rows = iter_csv_rows(CSV_FILE, encodings)
+    header = next(rows)
+
+    try:
+        site_idx = header.index("מספר אתר/תאור אתר")
+        sector_idx = header.index("סוג תוכן")
+    except ValueError as exc:
+        raise RuntimeError("Expected columns not found in CSV header.") from exc
+
+    sector_dictionary = dictionaries.get("sector_dictionary", {})
+    sector_keys = set(key.replace("\u00a0", " ").strip() for key in sector_dictionary.keys())
+    
+    sectors_found = []
+    dictionary_match = None
+    
+    # Check all rows for this site
+    for row in rows:
+        if len(row) <= max(site_idx, sector_idx):
+            continue
+        if row[site_idx] == site_id:
+            sector = row[sector_idx].replace("\u00a0", " ").strip()
+            if sector:
+                sectors_found.append(sector)
+                # Check if this sector is in the dictionary
+                if sector in sector_keys:
+                    dictionary_match = sector
+                    break  # Found a dictionary match, use it
+    
+    # If we found a dictionary match, return it
+    if dictionary_match:
+        return dictionary_match
+    
+    # Otherwise, return the first non-empty sector found
+    if sectors_found:
+        return sectors_found[0]
+    
+    raise RuntimeError(f"Site id {site_id} not found in CSV or all rows have empty sector.")
+
+
+def translate_sector(sector_he: str, dictionaries: dict) -> str:
+    """
+    Translate Hebrew sector/content type to English code using sector_dictionary.
+    If not found in dictionary, returns "GENERAL".
+    """
+    sectors = dictionaries.get("sector_dictionary", {})
+    for key, value in sectors.items():
+        if key.replace("\u00a0", " ").strip() == sector_he:
+            return value
+    # If not found in dictionary, return "GENERAL"
+    return "GENERAL"
+
+
 def find_site_reseller(site_id: str) -> str:
     """
     Look up 'תאור משווק' (reseller description) for the given site id in the CSV.
@@ -286,6 +345,35 @@ def set_player_isp(token: str, player_id: int, isp_en: str) -> None:
     resp.raise_for_status()
 
 
+def set_player_sector(token: str, player_id: int, sector_en: str) -> None:
+    """
+    Set the M4DS_Sector variable for a player using:
+      POST /v1/players/{id}/variables
+    """
+    if not sector_en:
+        return
+
+    payload = [{"name": "M4DS_Sector", "value": sector_en}]
+
+    print(f"  Sector POST body for player {player_id}: {json.dumps(payload, ensure_ascii=False)}")
+
+    resp = requests.post(
+        f"{API_BASE_URL}/v1/players/{player_id}/variables",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json-patch+json",
+        },
+        json=payload,
+        timeout=60,
+    )
+    if resp.status_code >= 400:
+        try:
+            print(f"  Sector POST error body: {resp.text}")
+        except Exception:
+            pass
+    resp.raise_for_status()
+
+
 def set_player_streaming_flags(
     token: str,
     player_id: int,
@@ -403,14 +491,16 @@ def main() -> None:
 
     site_id = prompt_site_id()
 
+    dictionaries = load_dictionaries()
     city_he = find_site_city(site_id)
     reseller_he = find_site_reseller(site_id)
     isp_he = find_site_isp(site_id)
-    dictionaries = load_dictionaries()
+    sector_he = find_site_sector(site_id, dictionaries)
     try:
         city_en = translate_city(city_he, dictionaries)
         reseller_en = translate_reseller(reseller_he, dictionaries)
         isp_en = translate_isp(isp_he, dictionaries)
+        sector_en = translate_sector(sector_he, dictionaries)
     except RuntimeError as exc:
         print(f"[ERROR] {exc}")
         return 1
@@ -418,7 +508,8 @@ def main() -> None:
     print(
         f"Site {site_id}: Hebrew city '{city_he}' -> English '{city_en}', "
         f"reseller '{reseller_he}' -> '{reseller_en}', "
-        f"ISP '{isp_he}' -> '{isp_en}'"
+        f"ISP '{isp_he}' -> '{isp_en}', "
+        f"sector '{sector_he}' -> '{sector_en}'"
     )
 
     api_key, organization = get_api_credentials()
@@ -477,6 +568,7 @@ def main() -> None:
 
             current_reseller = None
             current_isp = None
+            current_sector = None
             current_stream_hot = None
             current_stream_triple = None
             current_stream_vert_hot = None
@@ -490,6 +582,8 @@ def main() -> None:
                     current_reseller = item.get("value")
                 if item.get("name") == "M4DS_ISP":
                     current_isp = item.get("value")
+                if item.get("name") == "M4DS_Sector":
+                    current_sector = item.get("value")
                 if item.get("name") == "M4DS_StreamingHot_Muted":
                     current_stream_hot = item.get("value")
                 if item.get("name") == "M4DS_StreamingTriple_Muted":
@@ -502,6 +596,7 @@ def main() -> None:
             print(f"  Current city: {current_city!r}")
             print(f"  Current reseller: {current_reseller!r}")
             print(f"  Current ISP: {current_isp!r}")
+            print(f"  Current sector: {current_sector!r}")
             print(f"  Current StreamingHot_Muted: {current_stream_hot!r}")
             print(f"  Current StreamingTriple_Muted: {current_stream_triple!r}")
             print(f"  Current StreamingVerticalHot_Muted: {current_stream_vert_hot!r}")
@@ -510,11 +605,13 @@ def main() -> None:
             # Patch city
             patch_player_city(token, player_id, city_en)
 
-            # Set reseller and ISP via POST /v1/players/{id}/variables
+            # Set reseller, ISP, and sector via POST /v1/players/{id}/variables
             token = request_token(api_key, organization)
             set_player_reseller(token, player_id, reseller_en)
             token = request_token(api_key, organization)
             set_player_isp(token, player_id, isp_en)
+            token = request_token(api_key, organization)
+            set_player_sector(token, player_id, sector_en)
 
             # Set streaming-muted flags based on identifier and group rules
             ident_upper = identifier.upper()
@@ -553,6 +650,7 @@ def main() -> None:
 
             new_reseller = None
             new_isp = None
+            new_sector = None
             new_stream_hot = None
             new_stream_triple = None
             new_stream_vert_hot = None
@@ -564,6 +662,8 @@ def main() -> None:
                     new_reseller = item.get("value")
                 if item.get("name") == "M4DS_ISP":
                     new_isp = item.get("value")
+                if item.get("name") == "M4DS_Sector":
+                    new_sector = item.get("value")
                 if item.get("name") == "M4DS_StreamingHot_Muted":
                     new_stream_hot = item.get("value")
                 if item.get("name") == "M4DS_StreamingTriple_Muted":
@@ -576,6 +676,7 @@ def main() -> None:
             print(f"  Updated city: {new_city!r}")
             print(f"  Updated reseller: {new_reseller!r}")
             print(f"  Updated ISP: {new_isp!r}")
+            print(f"  Updated sector: {new_sector!r}")
             print(f"  Updated StreamingHot_Muted: {new_stream_hot!r}")
             print(f"  Updated StreamingTriple_Muted: {new_stream_triple!r}")
             print(f"  Updated StreamingVerticalHot_Muted: {new_stream_vert_hot!r}")
